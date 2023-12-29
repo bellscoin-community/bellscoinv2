@@ -1,14 +1,21 @@
 name: 🚨 CodeQL
 
 on:
+  workflow_dispatch:
   push:
+    paths-ignore:
+      - '**/*.md'
     branches:
       - '*-dev'
       - '*-maint'
+      - 'master'
+    tags-ignore:
+      - '**'
   pull_request:
     # The branches below must be a subset of the branches above
     branches:
       - '*-dev'
+      - 'master'
     paths-ignore:
       - '**/*.md'
       - '**/*.txt'
@@ -16,11 +23,13 @@ on:
       - 'doc/**'
       - 'share/**'
       - 'qa/**'
+  schedule:
+    - cron: '42 21 * * 4'
 
 jobs:
   analyze:
     name: Analyze
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     permissions:
       actions: read
       contents: read
@@ -29,8 +38,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        language: [ 'cpp' ]
-        # CodeQL supports [ 'cpp', 'csharp', 'go', 'java', 'javascript', 'python' ]
+        language: [ 'c-cpp', 'python', 'javascript-typescript', 'java-kotlin' ]
+        # CodeQL supports [ 'c-cpp', 'csharp', 'go', 'java-kotlin', 'javascript-typescript', 'python', 'ruby', 'swift' ]
+        # Use only 'java-kotlin' to analyze code written in Java, Kotlin or both
+        # Use only 'javascript-typescript' to analyze code written in JavaScript, TypeScript or both
+        # Learn more about CodeQL language support at https://aka.ms/codeql-docs/language-support
 
     steps:
     - name: Checkout repository
@@ -40,10 +52,6 @@ jobs:
       run: |
         sudo apt-get update --yes
         sudo apt-get install build-essential libtool autotools-dev automake pkg-config bsdmainutils --yes
-
-    - name: Set permission
-      run: |
-        cd .. && chmod 777 -R ./bellscoinv2 && cd ./bellscoinv2 
 
     - name: Dependency cache
       uses: actions/cache@v3
@@ -63,12 +71,21 @@ jobs:
       uses: github/codeql-action/init@v3
       with:
         languages: ${{ matrix.language }}
+        # If you wish to specify custom queries, you can do so here or in a config file.
+        # By default, queries listed here will override any specified in a config file.
+        # Prefix the list here with "+" to use these queries and those in the config file.
+
+        # For more details on CodeQL's query packs, refer to: https://docs.github.com/en/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-code-scanning#using-queries-in-ql-packs
+        # queries: security-extended,security-and-quality
 
     - name: Build Bellscoin
       run: |
        ./autogen.sh
+       autoupdate
        ./configure --prefix="$PWD"/depends/x86_64-pc-linux-gnu
        make -j4
 
     - name: Perform CodeQL Analysis
       uses: github/codeql-action/analyze@v3
+      with:
+        category: "/language:${{matrix.language}}"
