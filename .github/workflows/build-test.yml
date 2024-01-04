@@ -5,11 +5,18 @@ on:
   push:
     paths-ignore:
       - '**/*.md'
+    branches:
+      - '**'
+    tags-ignore:
+      - '**'
   pull_request:
     paths-ignore:
       - 'doc/**'
       - 'contrib/**'
       - '**/*.md'
+  release:
+    types: [published]
+
 concurrency:
   group: ${{ github.ref }}-${{ github.workflow }}-${{ github.event_name }}-${{ (github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/heads/version') || (github.ref == 'refs/heads/dev')) && github.sha || '' }}
   cancel-in-progress: true
@@ -19,7 +26,7 @@ jobs:
     name: ${{ matrix.name }}
 
     env:
-      MAKEJOBS: "-j3"
+      MAKEJOBS: "-j4"
       CHECK_DOC: "0"
       CCACHE_SIZE: "100M"
       CCACHE_TEMPDIR: /tmp/.ccache-temp
@@ -125,10 +132,25 @@ jobs:
 
     steps:
       - name: Install packages
+        shell: bash
         run: |
           sudo apt-get update
-          sudo apt-get install build-essential libtool autotools-dev automake pkg-config bsdmainutils curl ca-certificates ccache python3 rsync git procps bison
-          sudo apt-get install ${{ matrix.packages }}
+          sudo apt-get install -y \
+            automake \
+            autotools-dev \
+            bison \
+            bsdmainutils \
+            build-essential \
+            ca-certificates \
+            ccache \
+            curl \
+            git \
+            libtool \
+            pkg-config \
+            procps \
+            python3 \
+            rsync \
+            ${{ matrix.packages }}
 
       - name: Post install
         if: ${{ matrix.postinstall }}
@@ -137,19 +159,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set permission
-        run: |
-          cd .. && chmod 777 -R ./bellscoinv2 && cd ./bellscoinv2 
-
       - name: Dependency cache
         uses: actions/cache@v3
         env:
           cache-name: depends
         with:
           path: ./depends/built
-          key: ${{ matrix.name }}-${{ env.cache-name }}-${{ hashFiles('depends/packages/*', '.github/workflows/ci.yml') }}
+          key: ${{ matrix.name }}-${{ env.cache-name }}-${{ hashFiles('depends/packages/*', '.github/workflows/build-test.yml') }}
 
       - name: Build depends
+        shell: bash
         run: |
           make "$MAKEJOBS" -C depends HOST=${{ matrix.host }} ${{ matrix.dep-opts }}
 
@@ -159,23 +178,41 @@ jobs:
           cache-name: ccache
         with:
           path: ~/.ccache
-          key: ${{ matrix.name }}-${{ env.cache-name }}-${{ hashFiles('**/configure.ac', '.github/workflows/ci.yml') }}
+          key: ${{ matrix.name }}-${{ env.cache-name }}-${{ hashFiles('**/configure.ac', '.github/workflows/build-test.yml') }}
+
+      - name: Set Release Flag for Full Releases
+        if: github.event_name == 'release' && !github.event.release.prerelease
+        shell: bash
+        run: |
+          sed -i 's/_CLIENT_VERSION_IS_RELEASE, false/_CLIENT_VERSION_IS_RELEASE, true/' configure.ac
+          sed -i 's/#define CLIENT_VERSION_IS_RELEASE false/#define CLIENT_VERSION_IS_RELEASE true/' src/clientversion.h
 
       - name: Build Bellscoin
+        shell: bash
         run: |
           depends/${{ matrix.host }}/native/bin/ccache --max-size="$CCACHE_SIZE"
           ./autogen.sh
-          ./configure --prefix="$PWD"/depends/${{ matrix.host }} ${{ matrix.config-opts }} --enable-reduce-exports || ( cat config.log && false)
+          autoupdate
+          CONFIG_OPTS="${{ matrix.config-opts }}"
+          if [ "${{ matrix.run-tests }}" = "false" ]; then
+            CONFIG_OPTS="$CONFIG_OPTS --disable-tests"
+          fi
+          if [ "${{ matrix.run-bench }}" = "false" ]; then
+            CONFIG_OPTS="$CONFIG_OPTS --disable-bench"
+          fi
+          ./configure --prefix="$PWD"/depends/${{ matrix.host }} $CONFIG_OPTS --enable-reduce-exports || ( cat config.log && false)
           make "$MAKEJOBS" ${{ matrix.goal }} || ( echo "Build failure. Verbose build follows." && make ${{ matrix.goal }} V=1 ; false )
 
       - name: Run benchmark
         if: ${{ matrix.run-bench }}
+        shell: bash
         run: |
           src/bench/bench_bells > ${{ matrix.name }}-bench.csv
           cat ${{ matrix.name }}-bench.csv
 
       - name: Run tests
         if: ${{ matrix.run-tests }}
+        shell: bash
         run: |
           make check "$MAKEJOBS" VERBOSE=1
           qa/pull-tester/install-deps.sh
@@ -183,17 +220,47 @@ jobs:
 
       - name: Check security
         if: ${{ matrix.check-security }}
+        shell: bash
         run: make -C src check-security
 
       - name: Check symbols
         if: ${{ matrix.check-symbols }}
+        shell: bash
         run: make -C src check-symbols
+
+      - name: Bundle artifacts
+        shell: bash
+        run: |
+          if [ ${{ github.ref_type }} == "tag" ]; then
+            ARTIFACT_VERSION="${{ github.ref_name }}"
+            echo "ARTIFACT_VERSION=$ARTIFACT_VERSION" >> "$GITHUB_ENV"
+            echo "RELEASE_TAG=$ARTIFACT_VERSION" >> "$GITHUB_ENV"
+          else
+            GIT_SHORT_HASH="$(echo "${GITHUB_SHA}" | cut -c1-8)"
+            ARTIFACT_VERSION="$GIT_SHORT_HASH"
+            echo "GIT_SHORT_HASH=$GIT_SHORT_HASH" >> "$GITHUB_ENV"
+            echo "ARTIFACT_VERSION=$GIT_SHORT_HASH" >> "$GITHUB_ENV"
+          fi
+          mkdir -p bells-"$ARTIFACT_VERSION"-${{ matrix.name }}
+          cp -a depends/${{ matrix.host }}/bin/bells* bells-"$ARTIFACT_VERSION"-${{ matrix.name }}/
+          chmod +x bells-"$ARTIFACT_VERSION"-${{ matrix.name }}/bells*
+          7z a -tzip bells-"$ARTIFACT_VERSION"-${{ matrix.name }}.zip bells-"$ARTIFACT_VERSION"-${{ matrix.name }}
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: bellscoin-${{ github.sha }}-${{ matrix.name }}
+          name: bellscoin-${{ env.ARTIFACT_VERSION }}-${{ matrix.name }}.zip
           path: |
-            depends/${{ matrix.host }}/bin/bells*
-            dist/Bellscoin-Qt.app
+            bells-${{ env.ARTIFACT_VERSION }}-${{ matrix.name }}.zip
             ${{ matrix.name }}-bench.csv
+
+      - name: Upload release artifacts
+        if: ${{ github.event_name == 'release' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          gh release upload \
+            --repo ${{ github.repository }} \
+            ${{ env.RELEASE_TAG }} \
+            bells-${{ env.ARTIFACT_VERSION }}-${{ matrix.name }}.zip
