@@ -13,6 +13,8 @@ Bells Core [BEL]
 
 ## This branch contains the latest version 2.0.0 of the bells network.
 
+(Credits to BlobMaster41)
+
 ## What is Bells?
 Bells is the twin of DogeCoin, born before it, and just seen the lights now. [Visit blockchain explorer](https://belscan.io/)
 
@@ -28,10 +30,10 @@ The JSON-RPC API provided by Bells Core is self-documenting and can be browsed w
 
 ## Frequently Asked Questions
 
-### How much doge can exist?
-Total of 500,000,000 coins, special rewards system.
+### How much bells can exist?
+Max supply of 500,000,000 coins with special rewards system.
 
-### How get $bel?
+### How to get $bel?
 Scrypt Proof of Work
 
 1 Minute Block Targets, 4 Hour Diff Readjustments
